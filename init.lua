@@ -285,27 +285,46 @@ M.open_telescope_and_search = function()
                     if state.debug then print("select-pane output: " .. vim.inspect(select_pane_out),
                             vim.log.levels.WARN) end
                 end
-                -- Open the selected file in the existing nvim instance by sending keys to the pane (separated with short sleeps).
+                -- Prepare to open the target file in the Neovim instance running in the target tmux pane by sending keystrokes.
 
+                -- Sanitize path: escape single quotes for safe embedding inside a single-quoted shell string, and escape double quotes for use inside the Vim :edit argument.
                 local safe_path = path:gsub("'", "'\\''")
+                local safe_path_dq = safe_path:gsub('"', '\\"')
 
-                -- ensure normal mode
+                -- Determine target line number (checks `lnum`, `row`, `line` on the entry, then parses ":<num>:" in the value); if present, we prepend a `+<line>` argument to `:edit`.
+                local line = nil
+                if entry and entry.lnum then
+                    line = tonumber(entry.lnum)
+                elseif entry and entry.row then
+                    line = tonumber(entry.row)
+                elseif entry and entry.line then
+                    line = tonumber(entry.line)
+                else
+                    local parsed = tonumber((entry and entry.value or ""):match(":(%d+):"))
+                    if parsed then line = parsed end
+                end
+                local line_arg = ""
+                if line and line > 0 then
+                    line_arg = "+" .. tostring(line) .. " "
+                end
+
+                -- Ensure Neovim is in Normal mode (send Escape) so the following ex command is received correctly.
                 local cmd1 = string.format("tmux send-keys -t %s:%s.%s Escape", session.name, switch_to.index, switch_to.nvim_pane)
                 if state.debug then print("Running: " .. cmd1) end
                 local out1 = M.run_bash_command_and_get_output(cmd1)
                 if state.debug then print("send-keys (C-c) output: " .. vim.inspect(out1)) end
 
-                -- small pause
-                os.execute("sleep 0.05")
+                -- Short pause to let tmux/neovim process the Escape
+                -- os.execute("sleep 0.05")
 
-                -- send the :e command literally (characters sent with -l) and wrap path in quotes
-                local cmd2 = string.format("tmux send-keys -t %s:%s.%s -l ':silent! edit %s'", session.name, switch_to.index,
-                    switch_to.nvim_pane, safe_path)
+                -- Send the literal ':silent! edit {+line} "{path}"' characters via `tmux send-keys -l` (double-quoted path) so the target Neovim opens the file at the given line.
+                local cmd2 = string.format("tmux send-keys -t %s:%s.%s -l ':silent! edit %s %s'", session.name, switch_to.index,
+                    switch_to.nvim_pane, line_arg, safe_path_dq)
                 if state.debug then print("Running: " .. cmd2) end
                 local out2 = M.run_bash_command_and_get_output(cmd2)
                 if state.debug then print("send-keys (:e) output: " .. vim.inspect(out2)) end
 
-                os.execute("sleep 0.05")
+                -- os.execute("sleep 0.05")
 
                 -- press Enter
                 local cmd3 = string.format("tmux send-keys -t %s:%s.%s Enter", session.name, switch_to.index,
